@@ -1,4 +1,4 @@
-package src
+package chat
 
 import (
 	"fmt"
@@ -10,7 +10,7 @@ import (
 )
 
 // Represents the app version
-const appversion = "v1.1.0"
+const appversion = "v1.2.0"
 
 // A structure that represents the ChatRoom UI
 type UI struct {
@@ -319,7 +319,7 @@ func (ui *UI) syncpeerbox() {
 	// Iterate over the list of peers
 	for _, p := range peers {
 		// Generate the pretty version of the peer ID
-		peerid := p.Pretty()
+		peerid := p.String()
 		// Shorten the peer ID
 		peerid = peerid[len(peerid)-8:]
 		// Add the peer ID to the peer box

@@ -6,7 +6,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/manishmeganathan/peerchat/src"
+	"p2p4ai/pkg/chat"
+	"p2p4ai/pkg/p2p"
+
 	"github.com/sirupsen/logrus"
 )
 
@@ -20,7 +22,7 @@ W E L C O M E  T O
 88.  .88 88.      88.      88       88.      88    88 88.  .88   88   
 888888P' '88888P' '88888P' db       '88888P' db    db '8888888   '88P   
 88                                                                    
-dP     
+dP
 `
 
 func init() {
@@ -40,7 +42,19 @@ func main() {
 	username := flag.String("user", "", "username to use in the chatroom.")
 	chatroom := flag.String("room", "", "chatroom to join.")
 	loglevel := flag.String("log", "", "level of logs to print.")
-	discovery := flag.String("discover", "", "method to use for discovery.")
+	discovery := flag.String("discover", "advertise", "method to use for discovery.")
+	useDHT := flag.Bool("dht", true, "use dht")
+	useMDNS := flag.Bool("mdns", true, "use mdns")
+	useDefaultBootstrapPeers := flag.Bool(
+		"default_bootstrap_peers", true,
+		"use default bootstrap peers (if custom peers is set - add default to the bottom of the list)")
+	customBootstrapPeerAddrs := flag.String(
+		"bootstrap_peers",
+		"", "comma separated list of bootstrap peers")
+	customListenAddrs := flag.String(
+		"listen_addrs",
+		"", "comma separated list of listen maddrs. fallback to libp2p defaults if empty")
+	rendezvous := flag.String("rendezvous", p2p.Service, "rendezvous string. used if discovery is set to advertise")
 	// Parse input flags
 	flag.Parse()
 
@@ -65,35 +79,42 @@ func main() {
 	}
 
 	// Display the welcome figlet
-	fmt.Println(figlet)
+	fmt.Printf("%s\n", figlet)
 	fmt.Println("The PeerChat Application is starting.")
 	fmt.Println("This may take upto 30 seconds.")
 	fmt.Println()
 
 	// Create a new P2PHost
-	p2phost := src.NewP2P()
+	p2phost := p2p.NewP2P(*useDefaultBootstrapPeers, *useDHT, *useMDNS, *customListenAddrs, *customBootstrapPeerAddrs)
 	logrus.Infoln("Completed P2P Setup")
 
-	// Connect to peers with the chosen discovery method
-	switch *discovery {
-	case "announce":
-		p2phost.AnnounceConnect()
-	case "advertise":
-		p2phost.AdvertiseConnect()
-	default:
-		p2phost.AdvertiseConnect()
+	if *useDHT {
+		// Connect to peers with the chosen discovery method
+		switch *discovery {
+		case "announce":
+			p2phost.AnnounceConnect()
+		case "advertise":
+			p2phost.AdvertiseConnect(*rendezvous)
+		default:
+			p2phost.AdvertiseConnect(*rendezvous)
+		}
+		logrus.Infoln("Connected to Service Peers")
 	}
-	logrus.Infoln("Connected to Service Peers")
 
 	// Join the chat room
-	chatapp, _ := src.JoinChatRoom(p2phost, *username, *chatroom)
+	chatapp, _ := chat.JoinChatRoom(p2phost, *username, *chatroom)
 	logrus.Infof("Joined the '%s' chatroom as '%s'", chatapp.RoomName, chatapp.UserName)
 
 	// Wait for network setup to complete
 	time.Sleep(time.Second * 5)
 
-	// Create the Chat UI
-	ui := src.NewUI(chatapp)
-	// Start the UI system
-	ui.Run()
+	// // Create the Chat UI
+	ui := chat.NewUI(chatapp)
+	// // Start the UI system
+	err := ui.Run()
+	if err != nil {
+		logrus.WithFields(logrus.Fields{
+			"error": err.Error(),
+		}).Fatalln("UI run failed!")
+	}
 }

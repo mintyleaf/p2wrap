@@ -1,12 +1,14 @@
-package src
+package chat
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
 
-	"github.com/libp2p/go-libp2p-core/peer"
+	"p2p4ai/pkg/p2p"
+
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
+	"github.com/libp2p/go-libp2p/core/peer"
 )
 
 // Represents the default fallback room and user names
@@ -17,7 +19,7 @@ const defaultroom = "lobby"
 // A structure that represents a PubSub Chat Room
 type ChatRoom struct {
 	// Represents the P2P Host for the ChatRoom
-	Host *P2P
+	Host *p2p.P2P
 
 	// Represents the channel of incoming messages
 	Inbound chan chatmessage
@@ -58,7 +60,7 @@ type chatlog struct {
 
 // A constructor function that generates and returns a new
 // ChatRoom for a given P2PHost, username and roomname
-func JoinChatRoom(p2phost *P2P, username string, roomname string) (*ChatRoom, error) {
+func JoinChatRoom(p2phost *p2p.P2P, username string, roomname string) (*ChatRoom, error) {
 
 	// Create a PubSub topic with the room name
 	topic, err := p2phost.PubSub.Join(fmt.Sprintf("room-peerchat-%s", roomname))
@@ -128,7 +130,7 @@ func (cr *ChatRoom) PubLoop() {
 			// Create a ChatMessage
 			m := chatmessage{
 				Message:    message,
-				SenderID:   cr.selfid.Pretty(),
+				SenderID:   cr.selfid.String(),
 				SenderName: cr.UserName,
 			}
 
