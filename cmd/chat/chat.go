@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"p2p4ai/internal/chat"
@@ -31,6 +32,7 @@ func init() {
 		ForceColors:     true,
 		FullTimestamp:   true,
 		TimestampFormat: time.RFC822,
+		DisableQuote:    true,
 	})
 
 	// Log to stdout
@@ -48,12 +50,16 @@ func main() {
 	useDefaultBootstrapPeers := flag.Bool(
 		"default_bootstrap_peers", true,
 		"use default bootstrap peers (if custom peers is set - add default to the bottom of the list)")
-	customBootstrapPeerAddrs := flag.String(
+	customBootstrapPeerAddrsStr := flag.String(
 		"bootstrap_peers",
 		"", "comma separated list of bootstrap peers")
-	customListenAddrs := flag.String(
+	customListenAddrsStr := flag.String(
 		"listen_addrs",
 		"", "comma separated list of listen maddrs. fallback to libp2p defaults if empty")
+	customRelayAddrsStr := flag.String(
+		"relay_addrs",
+		"", "comma separated list of static relay maddrs",
+	)
 	rendezvous := flag.String("rendezvous", p2p.Service, "rendezvous string. used if discovery is set to advertise")
 	// Parse input flags
 	flag.Parse()
@@ -84,8 +90,25 @@ func main() {
 	fmt.Println("This may take upto 30 seconds.")
 	fmt.Println()
 
+	customListenAddrs := []string{}
+	customBootstrapPeerAddrs := []string{}
+	customRelayAddrs := []string{}
+
+	if *customListenAddrsStr != "" {
+		customListenAddrs = strings.Split(*customListenAddrsStr, ",")
+	}
+	if *customBootstrapPeerAddrsStr != "" {
+		customBootstrapPeerAddrs = strings.Split(*customBootstrapPeerAddrsStr, ",")
+	}
+	if *customRelayAddrsStr != "" {
+		customRelayAddrs = strings.Split(*customRelayAddrsStr, ",")
+	}
+
 	// Create a new P2PHost
-	p2phost := p2p.NewP2P(*useDefaultBootstrapPeers, *useDHT, *useMDNS, *customListenAddrs, *customBootstrapPeerAddrs)
+	p2phost := p2p.NewP2P(
+		*useDefaultBootstrapPeers, *useDHT, *useMDNS,
+		customListenAddrs, customRelayAddrs, customBootstrapPeerAddrs,
+	)
 	logrus.Infoln("Completed P2P Setup")
 
 	if *useDHT {

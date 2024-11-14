@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
-	"strings"
 	"sync"
 	"time"
 
@@ -83,36 +82,31 @@ A Kademlia DHT is then bootstrapped on this host using the default peers offered
 and a Peer Discovery service is created from this Kademlia DHT. The PubSub handler is then
 created on the host using the peer discovery service created prior.
 */
-func NewP2P(useDefaultPeers, useDHT, useMDNS bool, customListenAddrs, customBootstrapPeerAddrs string) *P2P {
+func NewP2P(
+	useDefaultPeers, useDHT, useMDNS bool,
+	customListenAddrs, customRelayAddrs, customBootstrapPeerAddrs []string,
+) *P2P {
+	ctx := context.Background()
 	opts := []config.Option{}
 
-	// Setup a background context
-	ctx := context.Background()
-
-	// Set up the host identity options
 	prvkey, _, err := crypto.GenerateKeyPairWithReader(crypto.RSA, 2048, rand.Reader)
 	identity := libp2p.Identity(prvkey)
-	// Handle any potential error
 	if err != nil {
 		logrus.WithFields(logrus.Fields{
 			"error": err.Error(),
 		}).Fatalln("Failed to Generate P2P Identity Configuration!")
 	}
 	opts = append(opts, identity)
-
-	// Trace log
 	logrus.Traceln("Generated P2P Identity Configuration")
 
 	// Set up TLS security and provide default transports
 	opts = append(opts, libp2p.Security(tls.ID, tls.New))
 	opts = append(opts, libp2p.DefaultTransports)
-
-	// Trace log
 	logrus.Traceln("Generated P2P Security and Transport Configurations")
 
 	addrs := []string{}
-	if customListenAddrs != "" {
-		addrs = append(addrs, strings.Split(customListenAddrs, ",")...)
+	if len(customListenAddrs) > 0 {
+		addrs = append(addrs, customListenAddrs...)
 	} else {
 		addrs = append(addrs, []string{
 			"/ip4/0.0.0.0/tcp/0",
@@ -136,20 +130,66 @@ func NewP2P(useDefaultPeers, useDHT, useMDNS bool, customListenAddrs, customBoot
 		}
 		listenAddrs = append(listenAddrs, addr)
 	}
-	// Set up host listener address options
 	listen := libp2p.ListenAddrs(listenAddrs...)
-	// Handle any potential error
 	if err != nil {
 		logrus.WithFields(logrus.Fields{
 			"error": err.Error(),
 		}).Fatalln("Failed to Generate P2P Address Listener Configuration!")
 	}
 	opts = append(opts, listen)
-
-	// Trace log
 	logrus.Traceln("Generated P2P Address Listener Configuration")
 
-	// Set up the stream multiplexer and connection manager options
+	kaddht := &dht.IpfsDHT{}
+	bootstrapPeerMultiaddrs := []multiaddr.Multiaddr{}
+	bootstrapPeerAddrInfos := []peer.AddrInfo{}
+
+	if useDHT {
+		addrs = []string{}
+		useDefaultPeers = len(customBootstrapPeerAddrs) == 0 || (useDefaultPeers && len(customBootstrapPeerAddrs) > 0)
+		if len(customBootstrapPeerAddrs) > 0 {
+			addrs = append(addrs, customBootstrapPeerAddrs...)
+		}
+		length := len(addrs)
+		if useDefaultPeers {
+			length += len(dht.DefaultBootstrapPeers)
+		}
+		bootstrapPeerMultiaddrs = make([]multiaddr.Multiaddr, 0, length)
+		for _, s := range addrs {
+			addr, err := multiaddr.NewMultiaddr(s)
+			if err != nil {
+				logrus.WithFields(logrus.Fields{
+					"error":            err.Error(),
+					"multiaddr_string": s,
+				}).Fatalln("Multiaddr creation failed!")
+			}
+			bootstrapPeerMultiaddrs = append(bootstrapPeerMultiaddrs, addr)
+		}
+		if useDefaultPeers {
+			bootstrapPeerMultiaddrs = append(bootstrapPeerMultiaddrs, dht.DefaultBootstrapPeers...)
+		}
+
+		bootstrapPeerAddrInfos = make([]peer.AddrInfo, 0, len(bootstrapPeerMultiaddrs))
+
+		for _, maddr := range bootstrapPeerMultiaddrs {
+			info, err := peer.AddrInfoFromP2pAddr(maddr)
+			if err != nil {
+				logrus.WithFields(logrus.Fields{
+					"error":            err.Error(),
+					"multiaddr_string": maddr.String(),
+				}).Fatalln("AddrInfo from multiaddr failed!")
+				continue
+			}
+			bootstrapPeerAddrInfos = append(bootstrapPeerAddrInfos, *info)
+		}
+
+		// Setup a routing configuration with the KadDHT
+		routing := libp2p.Routing(func(h host.Host) (routing.PeerRouting, error) {
+			kaddht = setupKadDHT(ctx, h, bootstrapPeerAddrInfos)
+			return kaddht, err
+		})
+		opts = append(opts, routing)
+	}
+
 	muxer := libp2p.Muxer("/yamux/1.0.0", yamux.DefaultTransport)
 	opts = append(opts, muxer)
 
@@ -161,37 +201,32 @@ func NewP2P(useDefaultPeers, useDHT, useMDNS bool, customListenAddrs, customBoot
 	if err != nil {
 		logrus.WithFields(logrus.Fields{
 			"error": err.Error(),
-		}).Fatalln("Faied to create new connection manager!")
+		}).Fatalln("Failed to create new connection manager!")
 	}
 	conn := libp2p.ConnectionManager(connManager)
 	opts = append(opts, conn)
-
-	// Trace log
 	logrus.Traceln("Generated P2P Stream Multiplexer, Connection Manager Configurations")
 
-	// Setup NAT traversal and relay options
-	nat := libp2p.NATPortMap()
-	opts = append(opts, nat)
+	opts = append(opts, libp2p.NATPortMap())
+	opts = append(opts, libp2p.EnableAutoNATv2())
+	logrus.Traceln("Generated NAT traversal options")
 
-	// TODO setup relay
-	// relay := libp2p.EnableAutoRelay()
-
-	// Trace log
-	logrus.Traceln("Generated P2P NAT Traversal and Relay Configurations")
-
-	// Declare a KadDHT
-	var kaddht *dht.IpfsDHT
-	if useDHT {
-		// Setup a routing configuration with the KadDHT
-		routing := libp2p.Routing(func(h host.Host) (routing.PeerRouting, error) {
-			kaddht = setupKadDHT(ctx, h)
-			return kaddht, err
-		})
-		opts = append(opts, routing)
+	if len(customRelayAddrs) > 0 {
+		relayAddrInfos := make([]peer.AddrInfo, len(customRelayAddrs))
+		for _, addr := range customRelayAddrs {
+			addrInfo, err := peer.AddrInfoFromString(addr)
+			if err != nil {
+				logrus.WithFields(logrus.Fields{
+					"error":            err.Error(),
+					"multiaddr_string": addr,
+				}).Fatalln("AddrInfo from string failed!")
+				continue
+			}
+			relayAddrInfos = append(relayAddrInfos, *addrInfo)
+		}
+		opts = append(opts, libp2p.EnableAutoRelayWithStaticRelays(relayAddrInfos))
+		logrus.Traceln("Added static relays")
 	}
-
-	// Trace log
-	logrus.Traceln("Generated P2P Routing Configurations")
 
 	// Construct a new libP2P host with the created options
 	nodehost, err := libp2p.New(opts...)
@@ -201,47 +236,21 @@ func NewP2P(useDefaultPeers, useDHT, useMDNS bool, customListenAddrs, customBoot
 			"error": err.Error(),
 		}).Fatalln("Failed to Create the P2P Host!")
 	}
-
-	// Debug log
 	logrus.Debugln("Created the P2P Host")
 
 	pubsubOpts := []pubsub.Option{}
 	routingDiscovery := &discoveryRouting.RoutingDiscovery{}
 	if useDHT {
-		addrs = []string{}
-		useDefaultPeers = customBootstrapPeerAddrs == "" || (useDefaultPeers && customBootstrapPeerAddrs != "")
-		if customBootstrapPeerAddrs != "" {
-			addrs = append(addrs, strings.Split(customBootstrapPeerAddrs, ",")...)
-		}
-		length := len(addrs)
-		if useDefaultPeers {
-			length += len(dht.DefaultBootstrapPeers)
-		}
-		bootstrapPeerAddrs := make([]multiaddr.Multiaddr, 0, length)
-		for _, s := range addrs {
-			addr, err := multiaddr.NewMultiaddr(s)
-			if err != nil {
-				logrus.WithFields(logrus.Fields{
-					"error":            err.Error(),
-					"multiaddr_string": s,
-				}).Fatalln("Multiaddr creation failed!")
-			}
-			bootstrapPeerAddrs = append(bootstrapPeerAddrs, addr)
-		}
-		if useDefaultPeers {
-			bootstrapPeerAddrs = append(bootstrapPeerAddrs, dht.DefaultBootstrapPeers...)
-		}
 		// Bootstrap the Kad DHT
-		bootstrapDHT(ctx, nodehost, kaddht, bootstrapPeerAddrs)
-		// Debug log
+		bootstrapDHT(ctx, nodehost, kaddht, bootstrapPeerMultiaddrs)
 		logrus.Debugln("Bootstrapped the Kademlia DHT and Connected to Bootstrap Peers")
 
 		// Create a peer discovery service using the Kad DHT
 		routingDiscovery = discoveryRouting.NewRoutingDiscovery(kaddht)
 		pubsubOpts = append(pubsubOpts, pubsub.WithDiscovery(routingDiscovery))
-		// Debug log
 		logrus.Debugln("Created the Peer Discovery Service")
 	}
+
 	if useMDNS {
 		if err := setupMDNSDiscovery(nodehost); err != nil {
 			logrus.WithFields(logrus.Fields{
@@ -253,14 +262,12 @@ func NewP2P(useDefaultPeers, useDHT, useMDNS bool, customListenAddrs, customBoot
 
 	// Create a PubSub handler with the routing discovery
 	pubsubhandler, err := pubsub.NewGossipSub(ctx, nodehost, pubsubOpts...)
-	// Handle any potential error
 	if err != nil {
 		logrus.WithFields(logrus.Fields{
 			"error": err.Error(),
 			"type":  "GossipSub",
 		}).Fatalln("PubSub Handler Creation Failed!")
 	}
-	// Debug log
 	logrus.Debugln("Created the PubSub Handler")
 
 	// Return the P2P object
@@ -305,7 +312,7 @@ func (p2p *P2P) AdvertiseConnect(rendezvous string) {
 	logrus.Traceln("Discovered PeerChat Service Peers.")
 
 	// Connect to peers as they are discovered
-	go handlePeerDiscovery(p2p.Host, peerchan)
+	go handlePeerDHTDiscovery(p2p.Host, peerchan)
 	// Trace log
 	logrus.Traceln("Started Peer Connection Handler.")
 }
@@ -339,17 +346,15 @@ func (p2p *P2P) AnnounceConnect() {
 	logrus.Traceln("Discovered PeerChat Service Peers.")
 
 	// Connect to peers as they are discovered
-	go handlePeerDiscovery(p2p.Host, peerchan)
+	go handlePeerDHTDiscovery(p2p.Host, peerchan)
 	// Debug log
 	logrus.Debugln("Started Peer Connection Handler.")
 }
 
 // A function that generates a Kademlia DHT object and returns it
-func setupKadDHT(ctx context.Context, nodehost host.Host) *dht.IpfsDHT {
+func setupKadDHT(ctx context.Context, nodehost host.Host, bootstrappeers []peer.AddrInfo) *dht.IpfsDHT {
 	// Create DHT server mode option
 	dhtmode := dht.Mode(dht.ModeServer)
-	// Rertieve the list of boostrap peer addresses
-	bootstrappeers := dht.GetDefaultBootstrapPeerAddrInfos()
 	// Create the DHT bootstrap peers option
 	dhtpeers := dht.BootstrapPeers(bootstrappeers...)
 
@@ -421,7 +426,7 @@ func bootstrapDHT(ctx context.Context, nodehost host.Host, kaddht *dht.IpfsDHT, 
 
 // A function that connects the given host to all peers recieved from a
 // channel of peer address information. Meant to be started as a go routine.
-func handlePeerDiscovery(nodehost host.Host, peerchan <-chan peer.AddrInfo) {
+func handlePeerDHTDiscovery(nodehost host.Host, peerchan <-chan peer.AddrInfo) {
 	// Iterate over the peer channel
 	for peer := range peerchan {
 		// Ignore if the discovered peer is the host itself
