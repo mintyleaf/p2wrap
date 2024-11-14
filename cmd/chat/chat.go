@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	"p2p4ai/pkg/chat"
+	"p2p4ai/internal/chat"
 	"p2p4ai/pkg/p2p"
 
 	"github.com/sirupsen/logrus"
