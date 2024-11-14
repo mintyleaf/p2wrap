@@ -224,6 +224,7 @@ func NewP2P(
 			}
 			relayAddrInfos = append(relayAddrInfos, *addrInfo)
 		}
+		opts = append(opts, libp2p.EnableRelay())
 		opts = append(opts, libp2p.EnableAutoRelayWithStaticRelays(relayAddrInfos))
 		logrus.Traceln("Added static relays")
 	}
