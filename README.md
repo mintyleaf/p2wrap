@@ -56,6 +56,10 @@ Usage of topicsub:
     	PubSub topic name (default "p2p4ai/peerchat")
 ```
 
+## build/run warning
+if you using go 1.23+ you can face various linker issues because of packages p2p lib is using  
+to fix it - pass `-ldflags="-checklinkname=0"` to the run/build command.
+
 ## run example
 first pane, run the chat demo with fast mDNS only resolving  
 `go run cmd/chat/chat.go -user username -room test -log trace -mdns=true -dht=false`
